@@ -1,0 +1,20 @@
+# Kunci privat simulasi: JANGAN di-commit
+certs/
+
+# Keluaran run (dibuat ulang oleh script)
+results/
+figures/
+signed/
+logs/
+
+# Bahan paper dan dokumen internal (tidak dipublikasikan)
+paper/
+SPEC.md
+CLAUDE.md
+.claude/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

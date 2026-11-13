@@ -1,0 +1,2 @@
+# PDF sampel harus tetap byte-identik (SHA-256 di README)
+*.pdf binary

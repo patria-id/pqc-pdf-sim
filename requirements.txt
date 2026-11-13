@@ -1,0 +1,22 @@
+# Python 3.11+ (dikembangkan di Python 3.13 Windows)
+#
+# cryptography >= 50 diperlukan: wheel-nya membawa OpenSSL 4.0.x dan
+# menyediakan API ML-DSA (kunci, sign/verify, sertifikat X.509).
+cryptography>=50.0
+asn1crypto>=1.5
+pyhanko>=0.38
+pikepdf>=10.0
+psutil>=7.0
+pyyaml>=6.0
+reportlab>=4.2
+pillow>=10.0
+pandas>=2.2
+matplotlib>=3.9
+scipy>=1.14
+pytest>=8.3
+
+# Opsional: liboqs-python (backend PQC alternatif).
+# Butuh pustaka native liboqs (oqs.dll) yang sudah dibangun; tanpa itu,
+# `import oqs` akan mencoba git clone + build dengan cmake secara otomatis.
+# Pasang manual bila backend ini dipilih:
+#   pip install liboqs-python==0.16.0.2

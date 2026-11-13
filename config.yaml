@@ -1,0 +1,66 @@
+seed: 42
+iterations: 1000
+warmup: 20
+smoke_iterations: 5
+pdf_sizes_kb: [100, 1024, 10240]
+signature_placeholder_bytes: 131072   # ruang /Contents di PDF (karakter heks = 2x byte DER; kapasitas CMS 65.536 B)
+algorithms:
+  rsa2048:    {family: rsa,    subscriber: RSA-2048,          ca: RSA-4096}
+  rsa3072:    {family: rsa,    subscriber: RSA-3072,          ca: RSA-4096}
+  mldsa44:    {family: mldsa,  subscriber: ML-DSA-44,         ca: ML-DSA-87}
+  mldsa65:    {family: mldsa,  subscriber: ML-DSA-65,         ca: ML-DSA-87}
+  slhdsa128s: {family: slhdsa, subscriber: SLH-DSA-SHA2-128s, ca: SLH-DSA-SHA2-192s}
+  slhdsa128f: {family: slhdsa, subscriber: SLH-DSA-SHA2-128f, ca: SLH-DSA-SHA2-192s}
+cert_profile:
+  country: ID
+  organization: "Simulasi CA Penelitian"
+  ca_validity_days: 3650
+  subscriber_validity_days: 730
+  hash: SHA-256
+paths: {pdf: pdf, certs: certs, signed: signed, results: results, figures: figures, logs: logs}
+
+# --- Pengaturan lanjutan (lihat README, bagian "Konfigurasi") ---
+crypto_backend: openssl-ctypes   # backend pengukuran untuk SEMUA algoritma: openssl-ctypes | cryptography | liboqs-python
+tools:
+  openssl_bin: "C:/Program Files/OpenSSL-Win64/bin/openssl.exe"   # CLI: hanya untuk menyiapkan kunci/sertifikat
+  libcrypto_path: null          # null = libcrypto-3-x64.dll di folder yang sama dengan openssl_bin
+  liboqs_install_path: null     # folder instalasi liboqs (berisi bin/oqs.dll); null = $HOME/_oqs
+  subprocess_timeout_s: 120
+env_check:
+  spike_algorithms: [mldsa44, slhdsa128f]   # ID dari `algorithms` untuk spike CMS
+  min_openssl: "3.5.0"
+pdf:
+  size_tolerance_pct: 5         # ukuran PDF harus dalam ±5% dari target
+  fit_tolerance_pct: 1          # target internal saat menyetel ukuran (lebih ketat)
+  jpeg_quality: 85              # kualitas JPEG gambar acak pengisi
+  max_image_px: 1400            # sisi maksimum satu gambar pengisi (piksel)
+bench:
+  smoke_warmup: 2               # warm-up per operasi pada mode --smoke
+  s1_message_bytes: 32          # pesan acak S1 (setara hash SHA-256)
+  disable_gc: true              # matikan garbage collector Python selama loop terukur
+  rounds: 10                    # iterasi dibagi ke N ronde; urutan algoritma diacak per ronde (selang-seling)
+  chunk_warmup: 2               # warm-up tambahan sebelum tiap potongan ronde ke-2 dst. (tidak dicatat)
+  process_priority: high        # high | normal
+  cpu_affinity: auto            # auto (CPU pertama core ke-2) | null | daftar indeks CPU logis
+  preflight_load_window_s: 5    # lama sampling beban CPU sebelum run
+  max_background_load_pct: 20   # batas beban latar; run penuh berhenti bila dilampaui (kecuali --allow-noisy)
+sign_pdf:
+  field_name: Signature1        # nama field tanda tangan (tak terlihat)
+  sample_interval_ms: 5         # interval thread sampler CPU/RSS
+  cpu_min_window_ms: 250        # sub-jendela minimum untuk CPU% (akuntansi CPU Windows ~15,6 ms -> galat ~±6%)
+verify_pdf:
+  sample_interval_ms: 5         # sama dengan sign_pdf agar CPU%/RSS S2 dan S3 sebanding
+  cpu_min_window_ms: 250
+measure_size:
+  placeholder_mode: fit         # fit = placeholder seukuran CMS + margin; fixed = signature_placeholder_bytes
+  placeholder_margin_bytes: 256 # cadangan byte DER di atas ukuran CMS (mode fit)
+  signed_subdir: fit            # PDF hasil S4 ditulis ke signed/<subdir>/
+analyze:
+  reference_alg: rsa2048        # pembanding rasio dan uji Mann–Whitney
+  alpha: 0.05                   # ambang signifikansi setelah koreksi Holm
+  dpi: 300
+  colors: ["#2a78d6", "#eb6834", "#1baf7a"]   # 3 seri kategorikal, urutan tetap (lolos uji CVD semua pasangan)
+smoke_results_subdir: smoke     # hasil --smoke ditulis ke results/<subdir>, tidak mencampur hasil penuh
+pki_names:
+  ca_cn: "CA Simulasi {ca} ({alg_id})"
+  user_cn: "Pemilik Simulasi {subscriber} ({alg_id})"
