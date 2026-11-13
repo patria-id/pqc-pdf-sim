@@ -6,8 +6,13 @@ import json
 
 import pytest
 
+from asn1crypto import x509 as ax509
+
 from src import build_pki, generate_pdfs, sign_pdf, verify_pdf
-from src.common.cms import der_length
+from src.common import pki
+from src.common.cms import cms_certificates, der_length
+from src.common.opensslcli import resolve_openssl_bin
+from src.common.x509util import read_der
 from src.common.config import load_config, pdf_name_for
 
 ALGS = ["rsa2048", "mldsa44", "slhdsa128f"]
@@ -82,26 +87,54 @@ def test_one_byte_change_in_signature_is_invalid(env, alg: str) -> None:
     assert res["valid"] is False and res["reason"] == "tanda tangan CMS tidak valid"
 
 
+def test_cms_embeds_full_chain(env) -> None:
+    cfg, base, _, _ = env
+    data = _signed(base, "mldsa44")
+    br = _byte_range(data)
+    _, certs = cms_certificates(bytes.fromhex(data[br[1] + 1:br[2] - 1].decode("ascii")))
+    p = base / "certs" / "mldsa44"
+    assert sorted(certs) == sorted(read_der(p / f) for f in ("user.crt", "ca.crt", "root.crt"))  # DER SET OF order
+
+
 def test_appended_bytes_are_invalid(env) -> None:
     cfg, base, _, _ = env
     res = verify_pdf.verify_pdf_bytes(_signed(base, "mldsa44") + b"\n%x\n", _trust(cfg, base, "mldsa44"))
     assert res["valid"] is False
 
 
-def test_wrong_trust_anchor_is_invalid(env) -> None:
+def test_wrong_trust_anchor_is_invalid(env, tmp_path) -> None:
     cfg, base, _, _ = env
+    exe = resolve_openssl_bin(cfg["tools"]["openssl_bin"])
+    other = pki.build_root(exe, cfg["pki"]["root_alg"], cfg, tmp_path, 60, "Root Lain", days=1)
     good = _trust(cfg, base, "mldsa44")
-    other_ca = _trust(cfg, base, "slhdsa128f")
-    wrong = verify_pdf.Trust(good.sub_alg, other_ca.ca_der, good.verify_sub, other_ca.verify_ca)
+    wrong = verify_pdf.Trust(good.sub_alg, read_der(other["root.crt"]), good.verify_sub, good.verify_ca,
+                             good.verify_root)
     res = verify_pdf.verify_pdf_bytes(_signed(base, "mldsa44"), wrong)
-    assert res["valid"] is False and "CA simulasi" in res["reason"]
+    assert res["valid"] is False and "Root CA simulasi" in res["reason"]
+
+
+def test_signer_path_checks(env) -> None:
+    cfg, base, _, _ = env
+    t = _trust(cfg, base, "mldsa44")
+    p = base / "certs" / "mldsa44"
+    user, psre = read_der(p / "user.crt"), read_der(p / "ca.crt")
+    when = ax509.Certificate.load(user)["tbs_certificate"]["validity"]["not_before"].native
+    assert verify_pdf.check_signer_cert(user, [user, psre, t.root_der], when, t) is None
+    assert verify_pdf.check_signer_cert(user, [user, psre], when, t) is None  # root is never taken from the CMS
+    assert "tidak ada di CMS" in verify_pdf.check_signer_cert(user, [user, t.root_der], when, t)
+    other_psre = read_der(base / "certs" / "slhdsa128f" / "ca.crt")  # same root, different PSrE
+    assert "tidak ada di CMS" in verify_pdf.check_signer_cert(user, [user, other_psre], when, t)
+    assert "Root" in verify_pdf.check_signer_cert(psre, [psre, t.root_der], when, t)  # CA cert as signer
+    later = when.replace(year=when.year + 5)
+    assert "signingTime" in verify_pdf.check_signer_cert(user, [user, psre], later, t)
 
 
 def test_unexpected_algorithm_is_invalid(env) -> None:
     cfg, base, _, _ = env
     t = _trust(cfg, base, "rsa2048")
     res = verify_pdf.verify_pdf_bytes(_signed(base, "rsa2048"),
-                                      verify_pdf.Trust("ML-DSA-44", t.ca_der, t.verify_sub, t.verify_ca))
+                                      verify_pdf.Trust("ML-DSA-44", t.root_der, t.verify_sub, t.verify_ca,
+                                                       t.verify_root))
     assert res["valid"] is False and "algoritma" in res["reason"]
 
 

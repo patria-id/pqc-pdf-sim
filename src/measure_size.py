@@ -14,7 +14,7 @@ saved to ``signed/<measure_size.signed_subdir>/``.
 
 Columns: ``placeholder_bytes`` is the DER capacity of ``/Contents`` (the hex string
 in the file is twice as long), ``placeholder_used_percent`` = cms_bytes / placeholder_bytes,
-``chain_bytes`` = DER size of all certificates embedded in the CMS (subscriber + CA).
+``chain_bytes`` = DER size of all certificates embedded in the CMS (subscriber + PSrE [+ Root]).
 
 Run: ``python -m src.measure_size --config config.yaml [--smoke] [--only <alg>] [--force]``
 """

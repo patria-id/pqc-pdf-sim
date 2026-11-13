@@ -81,10 +81,10 @@ def test_rsa_signature_valid_in_pyhanko(env) -> None:
     from asn1crypto import x509 as ax509
 
     cfg, base, _, _ = env
-    ca = ax509.Certificate.load(read_der(base / "certs" / "rsa2048" / "ca.crt"))
+    root = ax509.Certificate.load(read_der(base / "certs" / cfg["pki"]["root_dir"] / "root.crt"))
     with (base / "signed" / "rsa2048_100kb.pdf").open("rb") as fh:
         sig = PdfFileReader(fh).embedded_signatures[0]
-        status = validate_pdf_signature(sig, ValidationContext(trust_roots=[ca]))
+        status = validate_pdf_signature(sig, ValidationContext(trust_roots=[root]))  # path via the PSrE in the CMS
     assert status.intact and status.valid and status.trusted, status.pretty_print_details()
 
 

@@ -14,9 +14,14 @@ algorithms:
 cert_profile:
   country: ID
   organization: "Simulasi CA Penelitian"
-  ca_validity_days: 3650
+  root_validity_days: 7300
+  ca_validity_days: 3650        # PSrE (CA penerbit)
   subscriber_validity_days: 730
   hash: SHA-256
+pki:
+  root_alg: RSA-4096            # Root CA (satu untuk semua algoritma) -> PSrE (`ca` per algoritma) -> pemilik
+  embed_root: true              # sisipkan sertifikat Root ke CMS (rantai lengkap: pemilik + PSrE + Root)
+  root_dir: root                # folder Root CA bersama: certs/<root_dir>
 paths: {pdf: pdf, certs: certs, signed: signed, results: results, figures: figures, logs: logs}
 
 # --- Pengaturan lanjutan (lihat README, bagian "Konfigurasi") ---
@@ -62,5 +67,6 @@ analyze:
   colors: ["#2a78d6", "#eb6834", "#1baf7a"]   # 3 seri kategorikal, urutan tetap (lolos uji CVD semua pasangan)
 smoke_results_subdir: smoke     # hasil --smoke ditulis ke results/<subdir>, tidak mencampur hasil penuh
 pki_names:
-  ca_cn: "CA Simulasi {ca} ({alg_id})"
+  root_cn: "Root CA Simulasi ({root})"
+  ca_cn: "PSrE Simulasi {ca} ({alg_id})"
   user_cn: "Pemilik Simulasi {subscriber} ({alg_id})"

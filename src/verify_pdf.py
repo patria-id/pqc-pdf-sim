@@ -7,9 +7,11 @@ One verification iteration (all timed together), on the signed PDF already in me
      incremental update), and its gap is exactly the ``/Contents`` hex string;
   3. SHA-256 over the two ByteRange segments, compare with the CMS
      ``messageDigest``, check ``contentType`` and the signature algorithm OID;
-  4. validate the signer certificate against the simulated CA (trust anchor
-     ``certs/<alg>/ca.crt``, loaded once): issuer name, CA signature over the
-     TBSCertificate, validity at ``signingTime``, CA:FALSE, keyUsage
+  4. validate the path Root -> PSrE -> signer. The trust anchor is the simulated
+     Root CA (``certs/<pki.root_dir>/root.crt``, loaded once); the PSrE certificate
+     is taken from the CMS. PSrE: issued by the Root (signature over the
+     TBSCertificate), valid at ``signingTime``, CA:TRUE, keyCertSign. Signer:
+     issued by the PSrE, valid at ``signingTime``, CA:FALSE, keyUsage
      digitalSignature/nonRepudiation;
   5. verify the CMS signature over DER(signedAttrs) with the signer's public key.
 
@@ -44,11 +46,11 @@ from src.common.csvio import read_csv, write_csv
 from src.common.monitor import (ChunkProbe, NoisyEnvironment, ResourceSampler, preflight, process_tuning,
                                 resolve_affinity, snapshot)
 from src.common.oids import sig_oid
-from src.common.pki import ChainPaths
+from src.common.pki import root_paths
 from src.common.schedule import chunk_sizes, round_order
 from src.common.timer import gc_paused
 from src.common.util import pkg_version, short_err
-from src.common.x509util import read_der, spki_of, verify_issued_by
+from src.common.x509util import read_der, same_name, spki_of, verify_issued_by
 
 log = logging.getLogger("verify_pdf")
 
@@ -61,9 +63,10 @@ class Trust:
     """Verification state for one algorithm, prepared once (outside timing)."""
 
     sub_alg: str                                    # expected subscriber algorithm, e.g. 'ML-DSA-44'
-    ca_der: bytes                                   # trust anchor (simulated CA certificate)
+    root_der: bytes                                 # trust anchor (simulated Root CA certificate)
     verify_sub: Callable[[bytes, bytes, bytes], bool]   # (spki, signature, message) -> bool
-    verify_ca: Callable[[bytes, bytes, bytes], bool]
+    verify_ca: Callable[[bytes, bytes, bytes], bool]    # PSrE algorithm
+    verify_root: Callable[[bytes, bytes, bytes], bool]  # Root algorithm
 
     @property
     def expected_oid(self) -> str:
@@ -71,15 +74,15 @@ class Trust:
 
 
 def load_trust(cfg: dict[str, Any], alg_id: str, certs_dir: Path) -> Trust:
-    """Trust anchor and verification backends for `alg_id`."""
+    """Trust anchor (shared Root CA) and verification backends for `alg_id`."""
     spec = cfg["algorithms"][alg_id]
-    chain = ChainPaths(certs_dir / alg_id)
-    if not chain["ca.crt"].exists():
-        raise FileNotFoundError(f"{chain['ca.crt']} tidak ada; jalankan dulu: python -m src.build_pki")
-    sub_be, ca_be = get_backend(cfg, spec["subscriber"]), get_backend(cfg, spec["ca"])
-    if sub_be.verify_spki is None or ca_be.verify_spki is None:
+    root_crt = root_paths(cfg, certs_dir)["root.crt"]
+    if not root_crt.exists():
+        raise FileNotFoundError(f"{root_crt} tidak ada; jalankan dulu: python -m src.build_pki")
+    bes = [get_backend(cfg, a) for a in (spec["subscriber"], spec["ca"], cfg["pki"]["root_alg"])]
+    if any(b.verify_spki is None for b in bes):
         raise RuntimeError("backend tidak mendukung verifikasi dari SPKI")
-    return Trust(spec["subscriber"], read_der(chain["ca.crt"]), sub_be.verify_spki, ca_be.verify_spki)
+    return Trust(spec["subscriber"], read_der(root_crt), *(b.verify_spki for b in bes))
 
 
 def check_byte_range(data: bytes, br: list[int]) -> str | None:
@@ -94,13 +97,35 @@ def check_byte_range(data: bytes, br: list[int]) -> str | None:
     return None
 
 
-def check_signer_cert(cert_der: bytes, signing_time: dt.datetime | None, trust: Trust) -> str | None:
-    """None if the signer certificate chains to the trust anchor and fits a signing certificate profile."""
-    if not verify_issued_by(cert_der, trust.ca_der, trust.verify_ca):
-        return "sertifikat penanda tangan tidak diterbitkan oleh CA simulasi"
-    cert = ax509.Certificate.load(cert_der)
+def _valid_at(cert: ax509.Certificate, when: dt.datetime | None) -> bool:
     validity = cert["tbs_certificate"]["validity"]
-    if signing_time is None or not validity["not_before"].native <= signing_time <= validity["not_after"].native:
+    return when is not None and validity["not_before"].native <= when <= validity["not_after"].native
+
+
+def check_signer_cert(cert_der: bytes, certs_der: list[bytes], signing_time: dt.datetime | None,
+                      trust: Trust) -> str | None:
+    """None if the path Root -> PSrE -> signer is valid and the signer fits a signing certificate profile.
+
+    The PSrE certificate is looked up among `certs_der` (the certificates embedded in the CMS);
+    the Root is the trust anchor, never taken from the CMS.
+    """
+    cert = ax509.Certificate.load(cert_der)
+    psre_der = next((d for d in certs_der
+                     if d != cert_der and same_name(ax509.Certificate.load(d).subject, cert.issuer)), None)
+    if psre_der is None:
+        return "sertifikat PSrE penerbit tidak ada di CMS"
+    if psre_der == trust.root_der:
+        return "sertifikat penanda tangan diterbitkan langsung oleh Root (tanpa PSrE)"
+    if not verify_issued_by(psre_der, trust.root_der, trust.verify_root):
+        return "sertifikat PSrE tidak diterbitkan oleh Root CA simulasi"
+    psre = ax509.Certificate.load(psre_der)
+    if not _valid_at(psre, signing_time):
+        return "sertifikat PSrE tidak berlaku pada signingTime"
+    if not psre.ca or psre.key_usage_value is None or "key_cert_sign" not in psre.key_usage_value.native:
+        return "sertifikat PSrE bukan CA penerbit (basicConstraints/keyUsage)"
+    if not verify_issued_by(cert_der, psre_der, trust.verify_ca):
+        return "sertifikat penanda tangan tidak diterbitkan oleh PSrE"
+    if not _valid_at(cert, signing_time):
         return "sertifikat tidak berlaku pada signingTime"
     if cert.ca:
         return "sertifikat penanda tangan adalah sertifikat CA"
@@ -142,7 +167,7 @@ def verify_pdf_bytes(data: bytes, trust: Trust) -> dict[str, Any]:
             out["reason"] = "contentType bukan data"
         elif res["signature_alg"] != trust.expected_oid:
             out["reason"] = f"algoritma tanda tangan {res['signature_alg']} != {trust.expected_oid}"
-        elif (reason := check_signer_cert(res["signer_cert_der"], res["signing_time"], trust)) is not None:
+        elif (reason := check_signer_cert(res["signer_cert_der"], res["certs_der"], res["signing_time"], trust)) is not None:
             out["reason"] = reason
         elif not res["signature_ok"]:
             out["reason"] = "tanda tangan CMS tidak valid"

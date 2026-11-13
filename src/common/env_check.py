@@ -230,7 +230,9 @@ def run(cfg: dict[str, Any]) -> tuple[dict[str, Any], int]:
     timeout = cli_timeout(cfg)
     min_ver = parse_version(str(ec.get("min_openssl", "3.5.0")))
     algs: dict[str, dict[str, str]] = cfg["algorithms"]
-    names = sorted({a["subscriber"] for a in algs.values()} | {a["ca"] for a in algs.values()})
+    root_alg = cfg.get("pki", {}).get("root_alg")
+    names = sorted({a["subscriber"] for a in algs.values()} | {a["ca"] for a in algs.values()}
+                   | ({root_alg} if root_alg else set()))
 
     import ssl
 
@@ -294,6 +296,13 @@ def run(cfg: dict[str, Any]) -> tuple[dict[str, Any], int]:
             blockers.append(f"{aid}: belum ada jalur CMS yang terbukti")
         if entry["certs_via"] is None and entry["subscriber_backend"] != "cryptography":
             blockers.append(f"{aid}: tidak ada cara membuat sertifikat (CLI OpenSSL >= 3.5)")
+    if root_alg:
+        if probes[root_alg]["selected_backend"] is None:
+            blockers.append(f"Root CA: tidak ada backend in-process untuk {root_alg}")
+        elif probes[root_alg]["selected_backend"] != preferred:
+            blockers.append(f"Root CA: {root_alg} tidak bisa memakai backend '{preferred}'")
+        if not probes[root_alg]["openssl_cli_has_alg"]:
+            blockers.append(f"Root CA: CLI OpenSSL tidak mendukung {root_alg}")
     blockers = sorted(set(blockers))
 
     selected = {p["selected_backend"] for p in probes.values()}

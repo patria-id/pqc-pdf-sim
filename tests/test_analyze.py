@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from src import analyze
+from src import analyze, build_pki
 from src.common.config import load_config, pdf_name_for
 
 ALGS = ["rsa2048", "mldsa44", "slhdsa128f"]
@@ -44,9 +44,9 @@ def env(tmp_path_factory):
            [[a, pdf_name_for(kb), kb * 1024, kb * 1024 + 1000 * (j + 1), 1000 * (j + 1),
              100 * 1000 * (j + 1) / (kb * 1024), 500, 100, 300, 600, 83.3]
             for j, a in enumerate(ALGS) for kb in sizes])
-    _write(res / "cert_sizes.csv", ["alg", "ca_alg", "ca_cert_der_bytes", "user_cert_der_bytes", "chain_der_bytes",
-                                    "user_pubkey_bytes", "ca_pubkey_bytes"],
-           [[a, cfg["algorithms"][a]["ca"], 1000, 900, 1900, 300, 500] for a in ALGS])
+    _write(res / "cert_sizes.csv", build_pki.CERT_SIZES_COLUMNS,
+           [[a, cfg["algorithms"][a]["ca"], 1000, 900, 3300, 300, 500, cfg["pki"]["root_alg"], 1400, 550]
+            for a in ALGS])
     report = analyze.analyze(cfg, res, base / "figures")
     return cfg, base, res, report
 
@@ -93,6 +93,7 @@ def test_tables_and_figures(env) -> None:
     for title in ("Tabel 1.", "Tabel 2.", "Tabel 3.", "Tabel 4.", "Tabel 5.", "Tabel 6."):
         assert title in md
     assert "SLH-DSA-128f" in md and "RSA-2048" in md
+    assert "Hierarki: Root CA RSA-4096" in md and "3.300" in md
     names = {p.name for p in report["figures"]}
     assert names == {"s1_sign_verify.png", "s2_sign_by_size.png", "s3_verify_by_size.png",
                      "s4_size_overhead.png", "sizes_keys_signatures.png"}

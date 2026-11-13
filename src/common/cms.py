@@ -17,6 +17,7 @@ from asn1crypto import algos, cms
 from asn1crypto import x509 as ax509
 
 from src.common.oids import sig_oid
+from src.common.x509util import same_name
 
 
 @dataclass
@@ -91,14 +92,15 @@ def verify_cms_digest(cms_der: bytes, digest: bytes,
     sid = si["sid"].chosen
     signer = next(c.chosen for c in sd["certificates"]
                   if c.chosen.serial_number == sid["serial_number"].native
-                  and c.chosen.issuer == sid["issuer"])
+                  and same_name(c.chosen.issuer, sid["issuer"]))
     out: dict[str, Any] = {"digest_ok": digest_ok, "content_type_ok": content_type_ok,
                            "digest_alg": si["digest_algorithm"]["algorithm"].dotted,
                            "signature_alg": si["signature_algorithm"]["algorithm"].dotted,
                            "signed_attrs": sorted(attrs),
                            "signature_bytes": len(si["signature"].native),
                            "signing_time": attrs.get("signing_time"),
-                           "signer_cert_der": signer.dump()}
+                           "signer_cert_der": signer.dump(),
+                           "certs_der": [c.chosen.dump() for c in sd["certificates"]]}
     sig_ok = None
     if verify_with_cert is not None:
         attrs_der = si["signed_attrs"].dump()
@@ -127,7 +129,8 @@ def cms_certificates(cms_der: bytes) -> tuple[bytes, list[bytes]]:
     sd = cms.ContentInfo.load(cms_der)["content"]
     sid = sd["signer_infos"][0]["sid"].chosen
     certs = [c.chosen for c in sd["certificates"]]
-    signer = next(c for c in certs if c.serial_number == sid["serial_number"].native and c.issuer == sid["issuer"])
+    signer = next(c for c in certs
+                  if c.serial_number == sid["serial_number"].native and same_name(c.issuer, sid["issuer"]))
     return signer.dump(), [c.dump() for c in certs]
 
 

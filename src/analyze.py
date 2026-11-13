@@ -250,7 +250,7 @@ def tables_markdown(cfg: dict[str, Any], summary: pd.DataFrame, sig: pd.DataFram
             rows.append([alg_label(cfg, a)] + [fmt_id(median_of(sc, a, g), 2) for g in groups] +
                         [fmt_ratio(ratio_of(sc, a, g)) for g in groups])
         note = ("Mencakup persiapan PDF (pyHanko), pembuatan CMS, dan tanda tangan." if sc == "S2" else
-                "Mencakup parsing PDF, cek ByteRange, hash, validasi sertifikat ke CA, dan verifikasi CMS.")
+                "Mencakup parsing PDF, cek ByteRange, hash, validasi rantai pemilik → PSrE → Root CA, dan verifikasi CMS.")
         parts += [f"## Tabel {num}. {title}", "", md_table(header, rows), "", note + n_note, ""]
         num += 1
 
@@ -274,16 +274,21 @@ def tables_markdown(cfg: dict[str, Any], summary: pd.DataFrame, sig: pd.DataFram
 
     if cert_sizes is not None and len(cert_sizes):
         header = ["Algoritma", "Kunci publik pemilik (B, SPKI)", "Signature (B)", "Sertifikat pemilik (B)",
-                  "Algoritma CA", "Sertifikat CA (B)"]
+                  "Algoritma PSrE", "Sertifikat PSrE (B)", "Rantai di CMS (B)"]
         rows = []
         for a in ordered_algs(cfg, cert_sizes.alg.unique()):
             r = cert_sizes[cert_sizes.alg == a].iloc[0]
             rows.append([alg_label(cfg, a), fmt_id(float(r.user_pubkey_bytes), 0),
                          fmt_id(float(sigbytes[a]), 0) if a in sigbytes else "–",
                          fmt_id(float(r.user_cert_der_bytes), 0), str(r.ca_alg).replace("SHA2-", ""),
-                         fmt_id(float(r.ca_cert_der_bytes), 0)])
+                         fmt_id(float(r.ca_cert_der_bytes), 0), fmt_id(float(r.chain_der_bytes), 0)])
         parts += [f"## Tabel {num}. Ukuran kunci publik, signature, dan sertifikat", "",
-                  md_table(header, rows, "lrrrlr"), ""]
+                  md_table(header, rows, "lrrrlrr"), ""]
+        if "root_alg" in cert_sizes.columns:
+            r0 = cert_sizes.iloc[0]
+            embedded = "pemilik + PSrE + Root" if cfg.get("pki", {}).get("embed_root") else "pemilik + PSrE"
+            parts += [f"Hierarki: Root CA {r0.root_alg} (sertifikat {fmt_id(float(r0.root_cert_der_bytes), 0)} B, "
+                      f"sama untuk semua algoritma) → PSrE → pemilik. Rantai di CMS = {embedded}.", ""]
         num += 1
 
     if not sig.empty:

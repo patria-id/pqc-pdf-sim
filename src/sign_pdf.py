@@ -6,7 +6,7 @@ One signing iteration (all timed together):
      ``/Contents`` placeholder of ``signature_placeholder_bytes`` (hex chars),
      compute ``/ByteRange`` and its SHA-256 digest (pyHanko interrupted signing);
   3. build detached CMS SignedData (signedAttrs: contentType, messageDigest,
-     signingTime; certificates: subscriber + CA) with asn1crypto, signing
+     signingTime; certificates: subscriber + PSrE [+ Root]) with asn1crypto, signing
      DER(signedAttrs) through the configured backend (`crypto_backend`);
   4. write the CMS into the placeholder (incremental update, in memory).
 
@@ -44,7 +44,7 @@ from src.common.csvio import read_csv, write_csv
 from src.common.monitor import (ChunkProbe, NoisyEnvironment, ResourceSampler, preflight, process_tuning,
                                 resolve_affinity, snapshot)
 from src.common.oids import sig_oid
-from src.common.pki import ChainPaths
+from src.common.pki import ChainPaths, embedded_certs
 from src.common.schedule import chunk_sizes, round_order
 from src.common.timer import gc_paused
 from src.common.util import pkg_version
@@ -76,14 +76,14 @@ class Combo:
         return f"{self.alg_id}_{size_label(self.kb)}.pdf"
 
 
-def make_pdf_signer(field_name: str, alg: str, user_der: bytes, ca_der: bytes) -> Any:
+def make_pdf_signer(field_name: str, alg: str, user_der: bytes, chain_der: list[bytes]) -> Any:
     """pyHanko PdfSigner used only to prepare the PDF (placeholder, ByteRange, digest)."""
     from pyhanko.sign import fields, signers
     from pyhanko_certvalidator.registry import SimpleCertificateStore
 
     ext = signers.ExternalSigner(
         signing_cert=ax509.Certificate.load(user_der),
-        cert_registry=SimpleCertificateStore.from_certs([ax509.Certificate.load(ca_der)]),
+        cert_registry=SimpleCertificateStore.from_certs([ax509.Certificate.load(d) for d in chain_der]),
         signature_value=b"",
         signature_mechanism=algos.SignedDigestAlgorithm({"algorithm": sig_oid(alg)}),
     )
@@ -105,9 +105,9 @@ def prepare_combo(cfg: dict[str, Any], alg_id: str, kb: int, pdf_dir: Path, cert
     if be.load_private_pem is None or be.verify_spki is None:
         raise RuntimeError(f"backend {be.name} tidak mendukung kunci PEM / verifikasi SPKI")
     key = be.load_private_pem(chain["user.key"].read_bytes())
-    user_der, ca_der = read_der(chain["user.crt"]), read_der(chain["ca.crt"])
-    ctx = SignerContext.from_der(spec["subscriber"], lambda m, _k=key, _b=be: _b.sign(_k, m), user_der, [ca_der])
-    signer = make_pdf_signer(cfg["sign_pdf"]["field_name"], spec["subscriber"], user_der, ca_der)
+    user_der, extra = read_der(chain["user.crt"]), embedded_certs(cfg, chain)  # PSrE (+ Root)
+    ctx = SignerContext.from_der(spec["subscriber"], lambda m, _k=key, _b=be: _b.sign(_k, m), user_der, extra)
+    signer = make_pdf_signer(cfg["sign_pdf"]["field_name"], spec["subscriber"], user_der, extra)
     return Combo(alg_id, kb, pdf_path.name, pdf_path.read_bytes(), signer, ctx, be.verify_spki, user_der)
 
 

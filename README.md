@@ -5,8 +5,8 @@ post-quantum: **RSA-2048, RSA-3072, ML-DSA-44, ML-DSA-65, SLH-DSA-SHA2-128s, dan
 Script mengukur waktu, CPU, dan memori untuk operasi kriptografi, penandatanganan PDF, dan verifikasi
 PDF, serta pertambahan ukuran berkas setelah ditandatangani. Semua hasil ditulis ke CSV.
 
-Profil sertifikat meniru pola umum PKI tanda tangan elektronik: CA dua tingkat (CA + pemilik),
-SHA-256, keyUsage *digitalSignature* + *nonRepudiation*. Semua berjalan lokal dengan kunci dan CA
+Profil sertifikat meniru hierarki PKI tanda tangan elektronik di Indonesia, tiga level:
+**Root CA → PSrE → pemilik**, SHA-256, keyUsage *digitalSignature* + *nonRepudiation*. Semua berjalan lokal dengan kunci dan CA
 simulasi, tanpa koneksi ke layanan mana pun.
 
 > **Kunci dan sertifikat di sini hanya untuk simulasi.** Jangan dipakai untuk menandatangani dokumen
@@ -70,7 +70,7 @@ Mode `--smoke` memakai 5 iterasi dan PDF 100 KB saja. Hasilnya ditulis ke `resul
 |---|---|---|
 | 0 | `src.common.env_check` | Cek OpenSSL, backend, dan jalur CMS untuk setiap algoritma |
 | – | `src.generate_pdfs` | Membuat PDF sampel (dilewati bila sudah ada di `pdf/`) |
-| – | `src.build_pki` | Membuat CA dan sertifikat pemilik per algoritma di `certs/` (dilewati bila sudah ada) |
+| – | `src.build_pki` | Membuat satu Root CA, lalu PSrE dan sertifikat pemilik per algoritma di `certs/` (dilewati bila sudah ada) |
 | S1 | `src.bench_crypto` | Waktu keygen, sign, dan verify murni (pesan 32 byte) |
 | S2 | `src.sign_pdf` | Waktu tanda tangan PDF end-to-end, CPU%, dan RSS puncak |
 | S3 | `src.verify_pdf` | Waktu verifikasi PDF end-to-end, CPU%, RSS puncak, dan status valid |
@@ -142,7 +142,7 @@ Semua berkas keluaran dibuat ulang oleh script dan tidak disimpan di repo.
 | `results/env_report.json` | `env_check` | Versi OpenSSL, backend per algoritma, hasil uji CMS |
 | `results/system_info.json` | `run_all` | OS, CPU, RAM, mode daya, versi Python, OpenSSL, dan library |
 | `results/pdf_inventory.csv` | `generate_pdfs` | `pdf_name, target_kb, actual_bytes, pages, sha256` |
-| `results/cert_sizes.csv` | `build_pki` | `alg, ca_alg, ca_cert_der_bytes, user_cert_der_bytes, chain_der_bytes, user_pubkey_bytes, ca_pubkey_bytes` |
+| `results/cert_sizes.csv` | `build_pki` | `alg, ca_alg, ca_cert_der_bytes, user_cert_der_bytes, chain_der_bytes, user_pubkey_bytes, ca_pubkey_bytes, root_alg, root_cert_der_bytes, root_pubkey_bytes` |
 | `results/s1_crypto.csv` | `bench_crypto` | `alg, operation, iteration, time_ns, signature_bytes` |
 | `results/s2_sign.csv` | `sign_pdf` | `alg, pdf_name, iteration, time_ns, cpu_percent_peak, rss_peak_bytes` |
 | `results/s3_verify.csv` | `verify_pdf` | `alg, pdf_name, iteration, time_ns, cpu_percent_peak, rss_peak_bytes, valid` |
@@ -165,20 +165,26 @@ Keterangan kolom:
   minimal 250 ms. Di Windows, waktu CPU dihitung per sekitar 15,6 ms, sehingga angka per iterasi
   untuk operasi singkat hanya bermakna sebagai rata-rata banyak iterasi.
 - `rss_peak_bytes`: RSS puncak seluruh proses Python (termasuk library dan PDF yang dimuat).
-- `valid` (S3): `True` bila ByteRange, `messageDigest`, rantai sertifikat ke CA simulasi, dan
-  signature CMS semuanya benar.
+- `valid` (S3): `True` bila ByteRange, `messageDigest`, rantai sertifikat pemilik → PSrE → Root CA
+  simulasi, dan signature CMS semuanya benar.
+- `ca_*` (cert_sizes): sertifikat PSrE. `chain_der_bytes`: semua sertifikat yang disisipkan ke CMS.
 - `placeholder_bytes` (S4): kapasitas `/Contents` dalam byte DER. String heksadesimal di berkas
   panjangnya dua kali lipat.
-- `chain_bytes` (S4): ukuran DER semua sertifikat di dalam CMS (pemilik + CA).
+- `chain_bytes` (S4): ukuran DER semua sertifikat di dalam CMS (pemilik + PSrE + Root).
 
 ## Metode singkat
 
-- **Backend tunggal.** Semua operasi kunci publik untuk keenam algoritma, baik pemilik maupun CA,
+- **Hierarki PKI.** Satu Root CA RSA-4096 (`pki.root_alg`) menerbitkan sertifikat PSrE untuk
+  setiap algoritma: RSA-4096, ML-DSA-87, atau SLH-DSA-SHA2-192s (`algorithms.<id>.ca`). PSrE lalu
+  menerbitkan sertifikat pemilik. Untuk keluarga post-quantum, rantainya hibrida: Root tetap RSA
+  (skenario transisi). Root dipakai sebagai trust anchor saat verifikasi, dan tetap disisipkan ke
+  CMS (`pki.embed_root: true`).
+- **Backend tunggal.** Semua operasi kunci publik untuk keenam algoritma (pemilik, PSrE, dan Root)
   dipanggil lewat `libcrypto` OpenSSL 3.5+ dengan `ctypes` (`EVP_DigestSign`/`EVP_DigestVerify`).
   RSA memakai PKCS#1 v1.5 + SHA-256. ML-DSA dan SLH-DSA memakai mode murni dengan konteks kosong.
   CLI `openssl` hanya dipakai untuk membuat kunci dan sertifikat, tidak untuk pengukuran.
 - **CMS.** Tanda tangan PDF berupa CMS SignedData *detached* (`adbe.pkcs7.detached`). Isinya
-  signedAttrs (contentType, messageDigest SHA-256, signingTime) dan sertifikat pemilik + CA,
+  signedAttrs (contentType, messageDigest SHA-256, signingTime) dan sertifikat pemilik + PSrE + Root,
   disusun dengan `asn1crypto`. OID algoritma mengikuti RFC 9882 (ML-DSA) dan RFC 9814 (SLH-DSA).
   pyHanko menyiapkan PDF (field, placeholder, ByteRange). Jalur yang sama dipakai untuk RSA dan
   post-quantum, sehingga waktunya sebanding.
@@ -186,7 +192,7 @@ Keterangan kolom:
   menandatangani ulang setiap PDF dengan placeholder seukuran CMS + 256 byte
   (`measure_size.placeholder_mode: fit`), sehingga pertambahan ukuran berkas mencerminkan
   algoritmanya.
-- **Verifikasi PDF.** PDF RSA bisa diverifikasi di pyHanko maupun pembaca PDF umum (CA-nya akan
+- **Verifikasi PDF.** PDF RSA bisa diverifikasi di pyHanko maupun pembaca PDF umum (Root CA-nya akan
   tampil tidak tepercaya). PDF ML-DSA dan SLH-DSA belum tentu dikenali pembaca PDF umum. Gunakan
   `python -m src.verify_pdf --check` untuk memverifikasinya.
 
@@ -219,8 +225,9 @@ yang ditanam di kode.
 |---|---|
 | `seed`, `iterations`, `warmup`, `smoke_iterations` | Seed acak dan jumlah iterasi run penuh / smoke |
 | `pdf_sizes_kb` | Ukuran PDF sampel (KB) |
-| `algorithms` | ID algoritma → algoritma pemilik, algoritma CA, dan keluarga |
-| `cert_profile` | Negara, organisasi, masa berlaku CA dan pemilik |
+| `algorithms` | ID algoritma → algoritma pemilik, algoritma PSrE (`ca`), dan keluarga |
+| `cert_profile` | Negara, organisasi, masa berlaku Root, PSrE, dan pemilik |
+| `pki` | Algoritma Root CA, sisipkan Root ke CMS atau tidak, folder Root di `certs/` |
 | `paths` | Folder `pdf`, `certs`, `signed`, `results`, `figures`, `logs` |
 | `crypto_backend` | Backend pengukuran (`openssl-ctypes`; alternatif `cryptography` atau `liboqs-python`) |
 | `tools` | Lokasi CLI `openssl`, `libcrypto`, dan liboqs |
@@ -259,5 +266,5 @@ Folder `certs/`, `results/`, `signed/`, `figures/`, dan `logs/` dibuat saat scri
 ```
 
 Sekitar 3 menit. Tes membuat PDF, PKI, dan hasil di folder sementara, sehingga tidak menyentuh
-`results/`. Termasuk di dalamnya uji negatif: PDF yang diubah 1 byte, signature yang diubah, CA yang
-salah, atau algoritma yang salah harus menghasilkan `valid=False`.
+`results/`. Termasuk di dalamnya uji negatif: PDF yang diubah 1 byte, signature yang diubah, Root CA
+yang salah, PSrE yang hilang dari CMS, atau algoritma yang salah harus menghasilkan `valid=False`.
